@@ -1,0 +1,126 @@
+#cloud-config
+users:
+  - name: deploy
+    groups: docker,sudo
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh-authorized-keys:
+      - ssh-ed25519
+        AAAAC3NzaC1lZDI1NTE5AAAAIB8jAsdTe+1Wp0BlZS15FP8ce612SFMNr3dJyO/C7KGx
+        simadma.com
+disable_root: true
+
+packages:
+  - ca-certificates
+  - curl
+
+write_files:
+  - path: /root/code/traefik-public/.env
+    owner: root:root
+    permissions: '0600'
+    content: |
+      EMAIL=${EMAIL}
+      DOMAIN=${DOMAIN}
+      USERNAME=${USERNAME}
+      HASHED_PASSWORD='${HASHED_PASSWORD}'
+
+  - path: /root/code/traefik-public/docker-compose.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      services:
+        traefik:
+          image: traefik:v3.5
+
+          ports:
+            - "80:80"
+            - "443:443"
+
+          restart: unless-stopped
+
+          networks:
+            - traefik-public
+
+          volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            - traefik-public-certificates:/certificates
+
+          command:
+            # Entrypoints
+            - "--entrypoints.web.address=:80"
+            - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+            - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+            - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+            - "--entrypoints.websecure.address=:443"
+            - "--entrypoints.websecure.http.tls=true"
+
+            # Providers
+            - "--providers.docker=true"
+            - "--providers.docker.exposedbydefault=false"
+
+            # TLS Certificate Management
+            - "--certificatesresolvers.le.acme.email=$${EMAIL?Variable not set}"
+            - "--certificatesresolvers.le.acme.storage=/certificates/acme.json"
+            - "--certificatesresolvers.le.acme.tlschallenge=true"
+
+            # API & Dashboard
+            - "--api=true"
+
+            # Observability
+            - "--log.level=INFO"
+            - "--accesslog=true"
+            - "--metrics.prometheus=true"
+
+          labels:
+            - "traefik.enable=true"
+            - "traefik.docker.network=traefik-public"
+            - "traefik.http.routers.dashboard.rule=Host(`traefik.$${DOMAIN?Variable not set}`)"
+            - "traefik.http.routers.dashboard.entrypoints=websecure"
+            - "traefik.http.routers.dashboard.tls.certresolver=le"
+            - "traefik.http.routers.dashboard.service=api@internal"
+            - "traefik.http.routers.dashboard.middlewares=admin-auth"
+            - "traefik.http.middlewares.admin-auth.basicauth.users=$${USERNAME?Variable not set}:$${HASHED_PASSWORD?Variable not set}"
+
+          env_file:
+            - /root/code/traefik-public/.env
+
+      volumes:
+        traefik-public-certificates:
+
+      networks:
+        traefik-public:
+          external: true
+
+runcmd:
+  # Deny Root Login
+  - sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+  - systemctl restart ssh
+
+  # Add Docker's official GPG key:
+  - apt-get update
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl
+      -fsSL https://download.docker.com/linux/ubuntu/gpg
+      -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+
+  # Add the repository to Apt sources:
+  - echo "deb
+      [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      $(. /etc/os-release && echo "$${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+      stable"
+    | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - apt-get update
+
+  # Install the Docker packages:
+  - apt-get install -y
+      docker-ce
+      docker-ce-cli
+      containerd.io
+      docker-buildx-plugin
+      docker-compose-plugin
+  
+  # Set up Traefik
+  - docker network create traefik-public
+  - docker compose -f /root/code/traefik-public/docker-compose.yml up -d
