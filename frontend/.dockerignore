@@ -1,0 +1,26 @@
+node_modules/
+
+# pnpm store (if local)
+.pnpm-store/
+
+# SvelteKit build artifacts
+.svelte-kit/
+build/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Dev tool configs (not needed in Docker)
+.prettierignore
+.prettierrc
+eslint.config.js
+npm-debug.log*
+yarn-error.log*
