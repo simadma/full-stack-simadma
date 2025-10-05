@@ -1,0 +1,54 @@
+name: Deploy Stack to Web Server
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy-stack:
+    name: Deploy Stack
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ vars.DOMAIN }}
+      SSH_USER: ${{ vars.USERNAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Create .env file
+        run: |
+          cat <<EOF > .env
+          DOCKER_IMAGE_BACKEND=${DOCKER_IMAGE_BACKEND}
+          DOCKER_IMAGE_FRONTEND=${DOCKER_IMAGE_FRONTEND}
+          DOMAIN=${DOMAIN}
+          BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS}
+          VITE_API_URL=${VITE_API_URL}
+          EOF
+        env:
+          DOCKER_IMAGE_BACKEND: ${{ vars.DOCKER_IMAGE_BACKEND }}
+          DOCKER_IMAGE_FRONTEND: ${{ vars.DOCKER_IMAGE_FRONTEND }}
+          DOMAIN: ${{ vars.DOMAIN }}
+          BACKEND_CORS_ORIGINS: ${{ vars.BACKEND_CORS_ORIGINS }}
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+      - name: Sync files to remote
+        run: |
+          rsync -avz --delete \
+            .env \
+            docker-compose.yml \
+            backend \
+            frontend \
+            "${SSH_USER}@${SSH_HOST}:~/code/"
+
+      - name: Build and run stack
+        run: |
+          ssh "${SSH_USER}@${SSH_HOST}" \
+            "docker compose -f ~/code/docker-compose.yml up --build -d"
